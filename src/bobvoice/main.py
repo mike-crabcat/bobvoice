@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -21,6 +22,7 @@ from .ws_protocol import (
     CancelMessage,
     ErrorMessage,
     LatencyMessage,
+    PartialResponseMessage,
     ResponseTextMessage,
     SetLanguageMessage,
     StartRecordingMessage,
@@ -66,10 +68,14 @@ async def _send_error(websocket: WebSocket, message: str) -> None:
     await websocket.send_text(ErrorMessage(message=message).model_dump_json())
 
 
+_SENTENCE_END = re.compile(r"[.!?](?:\s|$)")
+
+
 async def _process_audio(
     websocket: WebSocket,
     audio_chunks: list[bytes],
     language: str | None,
+    user_id: str = "mike",
 ) -> None:
     _logger.info("Processing audio: %d chunks, %d bytes", len(audio_chunks), sum(len(c) for c in audio_chunks))
     await _send_status(websocket, "transcribing")
@@ -105,28 +111,64 @@ async def _process_audio(
     await _send_status(websocket, "thinking")
     t1 = time.monotonic()
     _logger.info("Calling OpenClaw...")
-    response = await openclaw_client.respond(text, detected_lang)
+
+    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
+    spoken_text = ""
+    tts_first_chunk_ms: int | None = None
+
+    async def on_delta(accumulated: str) -> None:
+        nonlocal spoken_text
+        while len(spoken_text) < len(accumulated):
+            unspoken = accumulated[len(spoken_text):]
+            match = _SENTENCE_END.search(unspoken)
+            if match is None:
+                break
+            sentence = unspoken[: match.end()]
+            spoken_text = accumulated[: len(spoken_text) + match.end()]
+            await sentence_queue.put(sentence)
+            await websocket.send_text(
+                PartialResponseMessage(text=spoken_text).model_dump_json()
+            )
+
+    async def tts_consumer() -> None:
+        nonlocal tts_first_chunk_ms
+        while True:
+            sentence = await sentence_queue.get()
+            if sentence is None:
+                break
+            async with tts_engine._lock:
+                audio, sr = await asyncio.to_thread(tts_engine.generate, sentence, detected_lang)
+                wav_bytes = samples_to_wav(audio, sr)
+            if tts_first_chunk_ms is None:
+                tts_first_chunk_ms = int((time.monotonic() - t1) * 1000)
+                await _send_status(websocket, "speaking")
+            await websocket.send_bytes(wav_bytes)
+
+    tts_task = asyncio.create_task(tts_consumer())
+
+    response = await openclaw_client.respond(text, detected_lang, on_delta=on_delta, user_id=user_id)
     openclaw_ms = int((time.monotonic() - t1) * 1000)
     _logger.info("OpenClaw done: %dms, response=%d chars", openclaw_ms, len(response))
+
+    # Flush any remaining text that didn't end with a sentence boundary
+    remaining = response[len(spoken_text):]
+    if remaining.strip():
+        spoken_text = response
+        await sentence_queue.put(remaining)
+        await websocket.send_text(
+            PartialResponseMessage(text=spoken_text).model_dump_json()
+        )
+
+    # Signal TTS consumer to finish
+    await sentence_queue.put(None)
+    await tts_task
+
+    if tts_first_chunk_ms is None:
+        tts_first_chunk_ms = int((time.monotonic() - t1) * 1000)
 
     await websocket.send_text(
         ResponseTextMessage(text=response).model_dump_json()
     )
-
-    await _send_status(websocket, "speaking")
-    t2 = time.monotonic()
-
-    _logger.info("Starting TTS for %d chars...", len(response))
-    async with tts_engine._lock:
-        audio, sr = await asyncio.to_thread(tts_engine.generate, response, detected_lang)
-        _logger.info("TTS generated: %d samples, %d Hz, %.1fs", len(audio), sr, len(audio) / sr)
-        wav_bytes = samples_to_wav(audio, sr)
-        await websocket.send_bytes(wav_bytes)
-
-    tts_ms = int((time.monotonic() - t2) * 1000)
-    _logger.info("TTS done: %dms", tts_ms)
-
-    tts_ms = int((time.monotonic() - t2) * 1000)
 
     e2e_ms = int((time.monotonic() - t0) * 1000)
 
@@ -135,7 +177,7 @@ async def _process_audio(
         LatencyMessage(
             stt_ms=stt_ms,
             openclaw_total_ms=openclaw_ms,
-            tts_first_chunk_ms=tts_ms,
+            tts_first_chunk_ms=tts_first_chunk_ms,
             e2e_ms=e2e_ms,
         ).model_dump_json()
     )
@@ -163,6 +205,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
     audio_chunks: list[bytes] = []
     language: str | None = None
+    user_id: str = "mike"
 
     try:
         while True:
@@ -179,10 +222,11 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     case StartRecordingMessage() as m:
                         audio_chunks = []
                         language = m.language
+                        user_id = m.userId
                         await _send_status(websocket, "recording")
 
                     case StopRecordingMessage():
-                        await _process_audio(websocket, audio_chunks, language)
+                        await _process_audio(websocket, audio_chunks, language, user_id)
 
                     case CancelMessage():
                         audio_chunks = []

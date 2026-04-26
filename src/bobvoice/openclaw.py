@@ -12,7 +12,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Awaitable
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
@@ -309,6 +309,21 @@ def _extract_response_text(response: Any) -> str:
 # Client
 # ---------------------------------------------------------------------------
 
+_LANGUAGE_NAMES: dict[str, str] = {
+    "pt": "Portuguese",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "nl": "Dutch",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "hi": "Hindi",
+}
+
 
 class OpenClawClient:
     def __init__(self, config: OpenClawConfig | None = None) -> None:
@@ -322,17 +337,31 @@ class OpenClawClient:
             self._identity = load_or_create_identity(self._config.identity_path)
         return self._identity
 
-    async def respond(self, text: str, language: str = "en") -> str:
+    async def respond(
+        self,
+        text: str,
+        language: str = "en",
+        *,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+        user_id: str = "mike",
+    ) -> str:
         if not self._config.enabled:
             return "I'm not connected to an AI service yet. Please configure the OpenClaw gateway."
 
         try:
-            return await self._dispatch(text)
+            return await self._dispatch(text, language=language, on_delta=on_delta, user_id=user_id)
         except Exception as exc:
             self._logger.error("OpenClaw gateway error: %s", exc)
             return "Sorry, I couldn't reach the AI service. Please try again."
 
-    async def _dispatch(self, text: str) -> str:
+    async def _dispatch(
+        self,
+        text: str,
+        *,
+        language: str = "en",
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+        user_id: str = "mike",
+    ) -> str:
         import websockets
 
         gateway_url = self._config.resolved_gateway_url
@@ -357,10 +386,17 @@ class OpenClawClient:
             }))
             await self._await_response(websocket, connect_id, timeout)
 
+            message = text
+            prefix = "[You are a voice assistant. Respond in plain spoken language: no emojis, no markdown formatting, no asterisks, no bullet points. Just natural speech.]"
+            if language and language != "en":
+                lang_name = _LANGUAGE_NAMES.get(language, language)
+                prefix += f" [Respond in {lang_name}. Act as a language coach: suggest corrections to the user's grammar and phrasing when they make mistakes.]"
+            message = f"{prefix} {text}"
+
             agent_params: dict[str, Any] = {
-                "message": text,
+                "message": message,
                 "deliver": False,
-                "sessionKey": f"bobvoice:voice:{uuid4()}",
+                "sessionKey": f"bobvoice:voice:{user_id}",
                 "thinking": "off",
                 "timeout": int(timeout * 1000),
                 "idempotencyKey": str(uuid4()),
@@ -376,6 +412,7 @@ class OpenClawClient:
             }))
             response = await self._await_response(
                 websocket, request_id, timeout, expect_final=True,
+                on_delta=on_delta,
             )
             return _extract_response_text(response)
 
@@ -406,12 +443,20 @@ class OpenClawClient:
         timeout: float,
         *,
         expect_final: bool = False,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
         while True:
             raw = await asyncio.wait_for(websocket.recv(), timeout=timeout)
             frame = json.loads(raw)
             if frame.get("type") == "event":
-                self._logger.info("OpenClaw event: %s", json.dumps(frame))
+                if on_delta is not None and frame.get("event") == "agent":
+                    payload = frame.get("payload")
+                    if isinstance(payload, dict) and payload.get("stream") == "assistant":
+                        data = payload.get("data")
+                        if isinstance(data, dict):
+                            text = data.get("text", "")
+                            if text:
+                                await on_delta(text)
                 continue
             if frame.get("type") != "res" or frame.get("id") != expected_id:
                 continue

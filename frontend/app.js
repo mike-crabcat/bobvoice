@@ -55,7 +55,7 @@ const app = {
     isConnected: false,
     isProcessing: false, // true from stop_recording until idle
     language: 'en',
-    userId: 'mike',
+    userId: localStorage.getItem('bobvoice-user-id') || 'mike',
     serverUrl: '',
     nextPlaybackTime: 0,
     audioSourceQueue: [],
@@ -95,6 +95,7 @@ const app = {
 
         this.userId = userId;
         this.serverUrl = url;
+        localStorage.setItem('bobvoice-user-id', userId);
         this.el['connect-btn'].disabled = true;
         this.el['connect-error'].classList.add('hidden');
 
@@ -359,6 +360,7 @@ const app = {
     ensureAudioContext() {
         if (!this.audioContext) {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            this.nextPlaybackTime = 0;
             serverLog('info', `AudioContext created: state=${this.audioContext.state}, sampleRate=${this.audioContext.sampleRate}`);
         }
         // iOS requires resume on user gesture
@@ -366,7 +368,6 @@ const app = {
             this.audioContext.resume();
             serverLog('info', 'AudioContext resumed from suspended');
         }
-        this.nextPlaybackTime = 0;
     },
 
     handleBinaryMessage(arrayBuffer) {
@@ -523,6 +524,9 @@ const app = {
             case 'transcript':
                 this.handleTranscript(msg);
                 break;
+            case 'partial_response':
+                this.handlePartialResponse(msg);
+                break;
             case 'response_text':
                 this.handleResponseText(msg);
                 break;
@@ -544,6 +548,7 @@ const app = {
         switch (state) {
             case 'recording':
                 // New interaction — stop any leftover audio from previous response
+                this._streamingBubble = null;
                 this.stopPlayback();
                 this.updateStatus('recording', 'Recording...');
                 break;
@@ -568,8 +573,21 @@ const app = {
         this.addUserMessage(msg.text);
     },
 
+    handlePartialResponse(msg) {
+        if (!this._streamingBubble) {
+            this._streamingBubble = this.addAssistantMessage(msg.text);
+        } else {
+            this._streamingBubble.textContent = msg.text;
+        }
+    },
+
     handleResponseText(msg) {
-        this.addAssistantMessage(msg.text);
+        if (this._streamingBubble) {
+            this._streamingBubble.textContent = msg.text;
+            this._streamingBubble = null;
+        } else {
+            this.addAssistantMessage(msg.text);
+        }
     },
 
     handleLatency(msg) {
@@ -652,7 +670,8 @@ const app = {
     },
 
     addAssistantMessage(text) {
-        this.addMessage(text, 'assistant');
+        const div = this.addMessage(text, 'assistant');
+        return div.querySelector('div:last-child');
     },
 
     addSystemMessage(text) {

@@ -66,6 +66,11 @@ class TranscriptMessage(BaseModel):
     latency_ms: int
 
 
+class PartialResponseMessage(BaseModel):
+    type: Literal["partial_response"] = "partial_response"
+    text: str
+
+
 class ResponseTextMessage(BaseModel):
     type: Literal["response_text"] = "response_text"
     text: str
