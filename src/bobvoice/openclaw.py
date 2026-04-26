@@ -343,13 +343,14 @@ class OpenClawClient:
         language: str = "en",
         *,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_tool_start: Callable[[], Awaitable[None]] | None = None,
         user_id: str = "mike",
     ) -> str:
         if not self._config.enabled:
             return "I'm not connected to an AI service yet. Please configure the OpenClaw gateway."
 
         try:
-            return await self._dispatch(text, language=language, on_delta=on_delta, user_id=user_id)
+            return await self._dispatch(text, language=language, on_delta=on_delta, on_tool_start=on_tool_start, user_id=user_id)
         except Exception as exc:
             self._logger.error("OpenClaw gateway error: %s", exc)
             return "Sorry, I couldn't reach the AI service. Please try again."
@@ -360,6 +361,7 @@ class OpenClawClient:
         *,
         language: str = "en",
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_tool_start: Callable[[], Awaitable[None]] | None = None,
         user_id: str = "mike",
     ) -> str:
         import websockets
@@ -412,7 +414,7 @@ class OpenClawClient:
             }))
             response = await self._await_response(
                 websocket, request_id, timeout, expect_final=True,
-                on_delta=on_delta,
+                on_delta=on_delta, on_tool_start=on_tool_start,
             )
             return _extract_response_text(response)
 
@@ -444,19 +446,27 @@ class OpenClawClient:
         *,
         expect_final: bool = False,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_tool_start: Callable[[], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
         while True:
             raw = await asyncio.wait_for(websocket.recv(), timeout=timeout)
             frame = json.loads(raw)
             if frame.get("type") == "event":
-                if on_delta is not None and frame.get("event") == "agent":
+                if frame.get("event") == "agent":
                     payload = frame.get("payload")
-                    if isinstance(payload, dict) and payload.get("stream") == "assistant":
-                        data = payload.get("data")
-                        if isinstance(data, dict):
-                            text = data.get("text", "")
-                            if text:
-                                await on_delta(text)
+                    if isinstance(payload, dict):
+                        stream = payload.get("stream")
+                        if on_delta is not None and stream == "assistant":
+                            data = payload.get("data")
+                            if isinstance(data, dict):
+                                text = data.get("text", "")
+                                if text:
+                                    await on_delta(text)
+                        if stream == "item":
+                            data = payload.get("data")
+                            if isinstance(data, dict):
+                                if on_tool_start is not None and data.get("kind") == "tool" and data.get("phase") == "start":
+                                    await on_tool_start()
                 continue
             if frame.get("type") != "res" or frame.get("id") != expected_id:
                 continue

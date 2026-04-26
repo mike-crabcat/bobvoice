@@ -69,6 +69,17 @@ async def _send_error(websocket: WebSocket, message: str) -> None:
 
 
 _SENTENCE_END = re.compile(r"[.!?](?:\s|$)")
+_FILLER_CACHE: dict[str, bytes] = {}
+
+
+def _generate_filler_wav(text: str) -> bytes:
+    if text in _FILLER_CACHE:
+        return _FILLER_CACHE[text]
+    audio, sr = tts_engine.generate(text, "en")
+    wav = samples_to_wav(audio, sr)
+    _FILLER_CACHE[text] = wav
+    _logger.info("Generated filler audio: %r (%d bytes)", text, len(wav))
+    return wav
 
 
 async def _process_audio(
@@ -116,8 +127,29 @@ async def _process_audio(
     spoken_text = ""
     tts_first_chunk_ms: int | None = None
 
+    # Pre-generate filler sounds for tool-call feedback
+    filler_hmm = _generate_filler_wav("Hmm.")
+    filler_thinking = _generate_filler_wav("Thinking.")
+    filler_last_time: float = 0
+    filler_waiting_for_text = False
+
+    async def on_tool_start() -> None:
+        nonlocal filler_last_time, filler_waiting_for_text
+        if filler_waiting_for_text:
+            _logger.info("Tool start: skipped (waiting for text)")
+            return
+        now = time.monotonic()
+        elapsed = now - filler_last_time if filler_last_time > 0 else 0
+        filler_waiting_for_text = True
+        filler_last_time = now
+        _logger.info("Tool start: playing filler (elapsed=%.1fs)", elapsed)
+        wav = filler_thinking if elapsed > 5 else filler_hmm
+        await websocket.send_bytes(wav)
+
     async def on_delta(accumulated: str) -> None:
-        nonlocal spoken_text
+        nonlocal spoken_text, filler_waiting_for_text
+        if filler_waiting_for_text and len(accumulated) > 0:
+            filler_waiting_for_text = False
         while len(spoken_text) < len(accumulated):
             unspoken = accumulated[len(spoken_text):]
             match = _SENTENCE_END.search(unspoken)
@@ -146,7 +178,7 @@ async def _process_audio(
 
     tts_task = asyncio.create_task(tts_consumer())
 
-    response = await openclaw_client.respond(text, detected_lang, on_delta=on_delta, user_id=user_id)
+    response = await openclaw_client.respond(text, detected_lang, on_delta=on_delta, on_tool_start=on_tool_start, user_id=user_id)
     openclaw_ms = int((time.monotonic() - t1) * 1000)
     _logger.info("OpenClaw done: %dms, response=%d chars", openclaw_ms, len(response))
 

@@ -302,23 +302,40 @@ const app = {
     pttEnd(event) {
         if (event) event.preventDefault();
         if (!this.isRecording) return;
-        this.stopRecording();
+        this.isRecording = false;
+        this.showVisualizer(false);
+        this.el['ptt-btn'].classList.remove('recording');
+        this.el['ptt-icon'].textContent = '🎙️';
+        this.el['ptt-label'].textContent = 'Hold to Talk';
 
-        // Send stop_recording to trigger pipeline
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: 'stop_recording' }));
-            this.isProcessing = true;
-            this.updateStatus('transcribing', 'Processing...');
+        // Stop MediaRecorder and wait for it to flush the final chunk
+        const recorder = this.mediaRecorder;
+        this.mediaRecorder = null;
+
+        const sendStop = () => {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this.ws.send(JSON.stringify({ type: 'stop_recording' }));
+                this.isProcessing = true;
+                this.updateStatus('transcribing', 'Processing...');
+            }
+        };
+
+        if (recorder && recorder.state !== 'inactive') {
+            recorder.onstop = () => sendStop();
+            try {
+                recorder.stop();
+            } catch (e) {
+                sendStop();
+            }
+        } else {
+            sendStop();
         }
     },
 
     stopRecording() {
         this.isRecording = false;
-
-        // Stop visualizer
         this.showVisualizer(false);
 
-        // Stop MediaRecorder
         if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
             try {
                 this.mediaRecorder.stop();
@@ -328,10 +345,6 @@ const app = {
         }
         this.mediaRecorder = null;
 
-        // Keep mic stream alive for instant reuse on next PTT press.
-        // It will be released on disconnect.
-
-        // Update UI
         this.el['ptt-btn'].classList.remove('recording');
         this.el['ptt-icon'].textContent = '🎙️';
         this.el['ptt-label'].textContent = 'Hold to Talk';

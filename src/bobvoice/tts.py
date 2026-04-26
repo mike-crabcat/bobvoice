@@ -21,9 +21,10 @@ _REF_AUDIO_DEFAULT = (
 
 _ABBREVIATIONS = frozenset({"dr", "mr", "mrs", "ms", "prof", "sr", "jr", "st", "vs", "etc", "eg", "ie", "approx"})
 
-_VOICE_INSTRUCT_DEFAULT = "female, young adult"
+_VOICE_INSTRUCT_BOB = "male, australian accent, young adult"
 _VOICE_INSTRUCT: dict[str, str] = {
     "pt": "female, portuguese accent, young adult",
+    "fr": "female, young adult",
 }
 
 
@@ -122,12 +123,13 @@ class TTSEngine:
             instruct = None
         else:
             voice_prompt = None
-            instruct = _VOICE_INSTRUCT.get(language, _VOICE_INSTRUCT_DEFAULT)
+            instruct = _VOICE_INSTRUCT.get(language, _VOICE_INSTRUCT_BOB)
         audio_arrays = self._model.generate(
             text=cleaned,
             language=language,
             voice_clone_prompt=voice_prompt,
             instruct=instruct,
+            speed=1.2,
             generation_config=OmniVoiceGenerationConfig(num_step=self._num_steps),
         )
         return audio_arrays[0], 24000
