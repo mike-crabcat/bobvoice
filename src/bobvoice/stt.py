@@ -34,7 +34,7 @@ def _convert_to_wav(audio_data: bytes) -> bytes:
 
 
 class STTEngine:
-    def __init__(self, model_size: str = "medium", device: str = "cuda", compute_type: str = "int8") -> None:
+    def __init__(self, model_size: str = "large-v3-turbo", device: str = "cuda", compute_type: str = "int8") -> None:
         self._model_size = model_size
         self._device = device
         self._compute_type = compute_type
