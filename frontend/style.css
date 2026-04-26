@@ -144,6 +144,40 @@ body {
     cursor: not-allowed;
 }
 
+.btn-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+}
+
+.btn-group .btn-primary {
+    margin-top: 0;
+}
+
+.btn-secondary {
+    width: 100%;
+    padding: 0.9rem;
+    border: 2px solid var(--accent);
+    border-radius: 14px;
+    background: transparent;
+    color: var(--accent);
+    font-size: 1.05rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.1s, opacity 0.2s;
+}
+
+.btn-secondary:active {
+    transform: scale(0.97);
+    opacity: 0.9;
+}
+
+.btn-secondary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .btn-danger {
     width: 100%;
     padding: 0.75rem;

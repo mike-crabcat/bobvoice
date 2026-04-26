@@ -31,9 +31,17 @@
                     <input type="text" id="user-id" placeholder="mike" value="mike"
                            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
                     
-                    <button id="connect-btn" class="btn-primary" onclick="app.connect()">
-                        Connect
-                    </button>
+                    <div class="btn-group">
+                        <button id="connect-btn" class="btn-primary" onclick="app.connect('chat')">
+                            Chat
+                        </button>
+                        <button id="pt-teacher-btn" class="btn-secondary" onclick="app.connect('portuguese_teacher')">
+                            Portuguese Teacher
+                        </button>
+                        <button id="fr-teacher-btn" class="btn-secondary" onclick="app.connect('french_teacher')">
+                            French Teacher
+                        </button>
+                    </div>
                 </div>
                 <div id="connect-error" class="error-msg hidden"></div>
             </div>

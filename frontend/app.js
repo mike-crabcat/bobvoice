@@ -3,7 +3,7 @@
  *
  * WebSocket protocol:
  *   Client → Server (text):
- *     {"type": "start_recording", "userId": "mike", "sessionKey": "voice-mike", "language": "en"}
+ *     {"type": "start_recording", "userId": "mike", "sessionKey": "voice-mike", "language": "en", "sessionMode": "chat|portuguese_teacher"}
  *     {"type": "stop_recording"}
  *     {"type": "cancel"}
  *     {"type": "set_language", "language": "pt"}
@@ -54,6 +54,7 @@ const app = {
     isRecording: false,
     isConnected: false,
     isProcessing: false, // true from stop_recording until idle
+    sessionMode: 'chat',
     language: 'en',
     userId: localStorage.getItem('bobvoice-user-id') || 'mike',
     serverUrl: '',
@@ -61,11 +62,14 @@ const app = {
     audioSourceQueue: [],
     settingsVisible: false,
 
+    _MODE_LANGUAGE: { portuguese_teacher: 'pt', french_teacher: 'fr' },
+    _MODE_LABELS: { chat: 'Bob Voice', portuguese_teacher: 'Portuguese Teacher', french_teacher: 'French Teacher' },
+
     // ---- DOM refs ----
     get el() {
         const ids = [
             'connect-overlay', 'main-ui', 'server-url', 'user-id', 'connect-btn',
-            'connect-error', 'status-indicator', 'status-text', 'connection-badge',
+            'pt-teacher-btn', 'fr-teacher-btn', 'connect-error', 'status-indicator', 'status-text', 'connection-badge',
             'messages', 'latency-bar', 'latency-info', 'ptt-btn', 'ptt-icon',
             'ptt-label', 'audio-visualizer', 'viz-canvas', 'settings-panel',
             'settings-server-url', 'language-select',
@@ -79,7 +83,17 @@ const app = {
 
     // ---- Connection ----
 
-    connect() {
+    _connectBtns() {
+        return [this.el['connect-btn'], this.el['pt-teacher-btn'], this.el['fr-teacher-btn']];
+    },
+
+    _setConnectBtns(disabled) {
+        for (const btn of this._connectBtns()) {
+            if (btn) btn.disabled = disabled;
+        }
+    },
+
+    connect(mode = 'chat') {
         const url = this.el['server-url'].value.trim();
         const userId = this.el['user-id'].value.trim() || 'mike';
 
@@ -95,8 +109,10 @@ const app = {
 
         this.userId = userId;
         this.serverUrl = url;
+        this.sessionMode = mode;
+        this.language = this._MODE_LANGUAGE[mode] || 'en';
         localStorage.setItem('bobvoice-user-id', userId);
-        this.el['connect-btn'].disabled = true;
+        this._setConnectBtns(true);
         this.el['connect-error'].classList.add('hidden');
 
         try {
@@ -110,12 +126,11 @@ const app = {
                 this.el['ptt-btn'].disabled = false;
                 this.updateStatus('idle', 'Ready');
                 this.el['settings-server-url'].textContent = url;
-                // Resume AudioContext on connect (user gesture)
+                this.el['language-select'].value = this.language;
                 this.ensureAudioContext();
-                this.addSystemMessage('Connected to Bob Voice');
-                // Pre-request mic permission so first PTT press is instant
+                this.addSystemMessage('Connected — ' + (this._MODE_LABELS[this.sessionMode] || 'Bob Voice'));
                 this.requestMic();
-                serverLog('info', `WebSocket connected, AudioContext state=${this.audioContext?.state}, sampleRate=${this.audioContext?.sampleRate}`);
+                serverLog('info', `WebSocket connected, mode=${this.sessionMode}, lang=${this.language}, AudioContext state=${this.audioContext?.state}, sampleRate=${this.audioContext?.sampleRate}`);
             };
 
             this.ws.onmessage = (event) => {
@@ -132,7 +147,7 @@ const app = {
 
             this.ws.onerror = () => {
                 this.showConnectError('Connection failed — check the URL and that the bridge server is running');
-                this.el['connect-btn'].disabled = false;
+                this._setConnectBtns(false);
             };
 
             // Timeout for slow connections
@@ -140,13 +155,13 @@ const app = {
                 if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
                     this.showConnectError('Connection timed out — check the URL');
                     this.ws.close();
-                    this.el['connect-btn'].disabled = false;
+                    this._setConnectBtns(false);
                 }
             }, 10000);
 
         } catch (e) {
             this.showConnectError(`Invalid URL: ${e.message}`);
-            this.el['connect-btn'].disabled = false;
+            this._setConnectBtns(false);
         }
     },
 
@@ -161,7 +176,7 @@ const app = {
         this.releaseMic();
         this.el['main-ui'].classList.add('hidden');
         this.el['connect-overlay'].classList.remove('hidden');
-        this.el['connect-btn'].disabled = false;
+        this._setConnectBtns(false);
     },
 
     handleDisconnect(code, reason) {
@@ -274,8 +289,9 @@ const app = {
             this.ws.send(JSON.stringify({
                 type: 'start_recording',
                 userId: this.userId,
-                sessionKey: `voice-${this.userId}`,
+                sessionKey: `${this.sessionMode === 'portuguese_teacher' ? 'teacher' : 'voice'}-${this.userId}`,
                 language: this.language === 'auto' ? undefined : this.language,
+                sessionMode: this.sessionMode,
             }));
 
             // Start recording with 100ms timeslice for streaming chunks
@@ -759,9 +775,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Save on connect
     const origConnect = app.connect.bind(app);
-    app.connect = function () {
+    app.connect = function (mode) {
         localStorage.setItem('bobvoice-server-url', app.el['server-url'].value.trim());
         localStorage.setItem('bobvoice-user-id', app.el['user-id'].value.trim());
-        origConnect();
+        origConnect(mode);
     };
 });

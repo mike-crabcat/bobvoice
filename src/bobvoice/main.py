@@ -87,6 +87,7 @@ async def _process_audio(
     audio_chunks: list[bytes],
     language: str | None,
     user_id: str = "mike",
+    session_mode: str = "chat",
 ) -> None:
     _logger.info("Processing audio: %d chunks, %d bytes", len(audio_chunks), sum(len(c) for c in audio_chunks))
     await _send_status(websocket, "transcribing")
@@ -178,7 +179,7 @@ async def _process_audio(
 
     tts_task = asyncio.create_task(tts_consumer())
 
-    response = await openclaw_client.respond(text, detected_lang, on_delta=on_delta, on_tool_start=on_tool_start, user_id=user_id)
+    response = await openclaw_client.respond(text, detected_lang, on_delta=on_delta, on_tool_start=on_tool_start, user_id=user_id, session_mode=session_mode)
     openclaw_ms = int((time.monotonic() - t1) * 1000)
     _logger.info("OpenClaw done: %dms, response=%d chars", openclaw_ms, len(response))
 
@@ -238,6 +239,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     audio_chunks: list[bytes] = []
     language: str | None = None
     user_id: str = "mike"
+    session_mode: str = "chat"
 
     try:
         while True:
@@ -255,10 +257,11 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         audio_chunks = []
                         language = m.language
                         user_id = m.userId
+                        session_mode = m.sessionMode
                         await _send_status(websocket, "recording")
 
                     case StopRecordingMessage():
-                        await _process_audio(websocket, audio_chunks, language, user_id)
+                        await _process_audio(websocket, audio_chunks, language, user_id, session_mode)
 
                     case CancelMessage():
                         audio_chunks = []
