@@ -13,6 +13,7 @@ class StartRecordingMessage(BaseModel):
     userId: str
     sessionKey: str
     language: str | None = None
+    sessionMode: Literal["chat", "portuguese_teacher", "french_teacher"] = "chat"
 
 
 class StopRecordingMessage(BaseModel):

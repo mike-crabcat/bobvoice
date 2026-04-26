@@ -324,6 +324,15 @@ _LANGUAGE_NAMES: dict[str, str] = {
     "hi": "Hindi",
 }
 
+_PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+
+
+def _load_prompt_template(name: str) -> str:
+    path = _PROMPTS_DIR / f"{name}.txt"
+    if path.is_file():
+        return path.read_text(encoding="utf-8").strip()
+    raise FileNotFoundError(f"Prompt template not found: {path}")
+
 
 class OpenClawClient:
     def __init__(self, config: OpenClawConfig | None = None) -> None:
@@ -345,12 +354,13 @@ class OpenClawClient:
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_start: Callable[[], Awaitable[None]] | None = None,
         user_id: str = "mike",
+        session_mode: str = "chat",
     ) -> str:
         if not self._config.enabled:
             return "I'm not connected to an AI service yet. Please configure the OpenClaw gateway."
 
         try:
-            return await self._dispatch(text, language=language, on_delta=on_delta, on_tool_start=on_tool_start, user_id=user_id)
+            return await self._dispatch(text, language=language, on_delta=on_delta, on_tool_start=on_tool_start, user_id=user_id, session_mode=session_mode)
         except Exception as exc:
             self._logger.error("OpenClaw gateway error: %s", exc)
             return "Sorry, I couldn't reach the AI service. Please try again."
@@ -363,6 +373,7 @@ class OpenClawClient:
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_start: Callable[[], Awaitable[None]] | None = None,
         user_id: str = "mike",
+        session_mode: str = "chat",
     ) -> str:
         import websockets
 
@@ -389,16 +400,19 @@ class OpenClawClient:
             await self._await_response(websocket, connect_id, timeout)
 
             message = text
-            prefix = "[You are a voice assistant. Respond in plain spoken language: no emojis, no markdown formatting, no asterisks, no bullet points. Just natural speech.]"
-            if language and language != "en":
-                lang_name = _LANGUAGE_NAMES.get(language, language)
-                prefix += f" [Respond in {lang_name}. Act as a language coach: suggest corrections to the user's grammar and phrasing when they make mistakes.]"
+            if session_mode.endswith("_teacher"):
+                prefix = _load_prompt_template(session_mode)
+            else:
+                prefix = "[You are a voice assistant. Respond in plain spoken language: no emojis, no markdown formatting, no asterisks, no bullet points. Just natural speech.]"
+                if language and language != "en":
+                    lang_name = _LANGUAGE_NAMES.get(language, language)
+                    prefix += f" [Respond in {lang_name}. Act as a language coach: suggest corrections to the user's grammar and phrasing when they make mistakes.]"
             message = f"{prefix} {text}"
 
             agent_params: dict[str, Any] = {
                 "message": message,
                 "deliver": False,
-                "sessionKey": f"bobvoice:voice:{user_id}",
+                "sessionKey": f"bobvoice:{session_mode}:{user_id}",
                 "thinking": "off",
                 "timeout": int(timeout * 1000),
                 "idempotencyKey": str(uuid4()),

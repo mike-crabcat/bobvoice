@@ -121,15 +121,17 @@ class TTSEngine:
         if language in ("en", ""):
             voice_prompt = self._voice_prompt
             instruct = None
+            speed = 1.2
         else:
             voice_prompt = None
             instruct = _VOICE_INSTRUCT.get(language, _VOICE_INSTRUCT_BOB)
+            speed = 1.0
         audio_arrays = self._model.generate(
             text=cleaned,
             language=language,
             voice_clone_prompt=voice_prompt,
             instruct=instruct,
-            speed=1.2,
+            speed=speed,
             generation_config=OmniVoiceGenerationConfig(num_step=self._num_steps),
         )
         return audio_arrays[0], 24000
