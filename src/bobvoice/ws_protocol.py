@@ -13,7 +13,7 @@ class StartRecordingMessage(BaseModel):
     userId: str
     sessionKey: str
     language: str | None = None
-    sessionMode: Literal["chat", "portuguese_teacher", "french_teacher"] = "chat"
+    sessionMode: Literal["chat", "portuguese_teacher", "french_teacher", "beginner_french"] = "chat"
 
 
 class StopRecordingMessage(BaseModel):
@@ -32,16 +32,22 @@ class SetLanguageMessage(BaseModel):
 class SessionHistoryMessage(BaseModel):
     type: Literal["session_history"]
     userId: str
-    sessionMode: Literal["chat", "portuguese_teacher", "french_teacher"] = "chat"
+    sessionMode: Literal["chat", "portuguese_teacher", "french_teacher", "beginner_french"] = "chat"
 
 
 class ClearHistoryMessage(BaseModel):
     type: Literal["clear_history"]
     userId: str
-    sessionMode: Literal["chat", "portuguese_teacher", "french_teacher"] = "chat"
+    sessionMode: Literal["chat", "portuguese_teacher", "french_teacher", "beginner_french"] = "chat"
 
 
-ClientMessage = StartRecordingMessage | StopRecordingMessage | CancelMessage | SetLanguageMessage | SessionHistoryMessage | ClearHistoryMessage
+class ReplayTtsMessage(BaseModel):
+    type: Literal["replay_tts"]
+    text: str
+    sessionMode: Literal["chat", "portuguese_teacher", "french_teacher", "beginner_french"] = "chat"
+
+
+ClientMessage = StartRecordingMessage | StopRecordingMessage | CancelMessage | SetLanguageMessage | SessionHistoryMessage | ClearHistoryMessage | ReplayTtsMessage
 
 _MESSAGE_MAP: dict[str, type[ClientMessage]] = {
     "start_recording": StartRecordingMessage,
@@ -50,6 +56,7 @@ _MESSAGE_MAP: dict[str, type[ClientMessage]] = {
     "set_language": SetLanguageMessage,
     "session_history": SessionHistoryMessage,
     "clear_history": ClearHistoryMessage,
+    "replay_tts": ReplayTtsMessage,
 }
 
 
@@ -111,8 +118,17 @@ class ErrorMessage(BaseModel):
 class HistoryEntry(BaseModel):
     role: str
     text: str
+    language: str | None = None
 
 
 class HistoryMessage(BaseModel):
     type: Literal["history"] = "history"
     messages: list[HistoryEntry]
+
+
+class LessonProgressMessage(BaseModel):
+    type: Literal["lesson_progress"] = "lesson_progress"
+    lessonNumber: int
+    totalLessons: int
+    completedSteps: list[int]
+    totalSteps: int

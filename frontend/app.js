@@ -61,15 +61,26 @@ const app = {
     nextPlaybackTime: 0,
     audioSourceQueue: [],
     settingsVisible: false,
+    _isReplaying: false,
 
-    _MODE_LANGUAGE: { portuguese_teacher: 'pt', french_teacher: 'fr' },
-    _MODE_LABELS: { chat: 'Bob Voice', portuguese_teacher: 'Portuguese Teacher', french_teacher: 'French Teacher' },
+    _MODE_LANGUAGE: { portuguese_teacher: 'pt', french_teacher: 'fr', beginner_french: 'auto' },
+
+    _LANGUAGE_NAMES: {
+        en: 'English', fr: 'French', pt: 'Portuguese', es: 'Spanish',
+        de: 'German', it: 'Italian', nl: 'Dutch', ja: 'Japanese',
+        ko: 'Korean', zh: 'Chinese', ru: 'Russian', ar: 'Arabic',
+        hi: 'Hindi', pl: 'Polish', tr: 'Turkish', sv: 'Swedish',
+        da: 'Danish', fi: 'Finnish', no: 'Norwegian', cs: 'Czech',
+        el: 'Greek', he: 'Hebrew', th: 'Thai', vi: 'Vietnamese',
+        id: 'Indonesian', uk: 'Ukrainian', ro: 'Romanian', hu: 'Hungarian',
+    },
+    _MODE_LABELS: { chat: 'Bob Voice', portuguese_teacher: 'Portuguese Teacher', french_teacher: 'French Teacher', beginner_french: 'Beginner French' },
 
     // ---- DOM refs ----
     get el() {
         const ids = [
             'connect-overlay', 'main-ui', 'server-url', 'user-id', 'connect-btn',
-            'pt-teacher-btn', 'fr-teacher-btn', 'connect-error', 'status-indicator', 'status-text', 'connection-badge',
+            'pt-teacher-btn', 'fr-teacher-btn', 'beginner-fr-btn', 'connect-error', 'status-indicator', 'status-text', 'connection-badge',
             'messages', 'latency-bar', 'latency-info', 'ptt-btn', 'ptt-icon',
             'ptt-label', 'audio-visualizer', 'viz-canvas', 'settings-panel',
             'settings-server-url', 'language-select',
@@ -84,7 +95,7 @@ const app = {
     // ---- Connection ----
 
     _connectBtns() {
-        return [this.el['connect-btn'], this.el['pt-teacher-btn'], this.el['fr-teacher-btn']];
+        return [this.el['connect-btn'], this.el['pt-teacher-btn'], this.el['fr-teacher-btn'], this.el['beginner-fr-btn']];
     },
 
     _setConnectBtns(disabled) {
@@ -434,6 +445,10 @@ const app = {
 
             const now = this.audioContext.currentTime;
 
+            if (this.audioContext.state !== 'running') {
+                serverLog('error', `AudioContext not running during playback: state=${this.audioContext.state}`);
+            }
+
             // Schedule playback — chain after previous chunk for gapless playback
             if (this.nextPlaybackTime <= now) {
                 // Start immediately (no previous chunk playing or gap)
@@ -443,31 +458,37 @@ const app = {
             const startTime = this.nextPlaybackTime;
             source.start(startTime);
             this.nextPlaybackTime = startTime + audioBuffer.duration;
-            serverLog('info', `Scheduled audio: start=${startTime.toFixed(2)}s, duration=${audioBuffer.duration.toFixed(2)}s, queue=${this.audioSourceQueue.length}`);
+            serverLog('info', `Scheduled audio: start=${startTime.toFixed(2)}s, duration=${audioBuffer.duration.toFixed(2)}s, queue=${this.audioSourceQueue.length}, ctxState=${this.audioContext.state}`);
 
             // Track source for potential cancellation
             this.audioSourceQueue.push(source);
             source.onended = () => {
                 const idx = this.audioSourceQueue.indexOf(source);
                 if (idx >= 0) this.audioSourceQueue.splice(idx, 1);
+                serverLog('info', `Audio source ended: remaining=${this.audioSourceQueue.length}`);
             };
         } catch (e) {
-            serverLog('error', `playAudioBuffer error: ${e.message}`);
+            serverLog('error', `playAudioBuffer error: ${e.message}`, `ctxState=${this.audioContext.state}`);
         }
     },
 
     playFallback(arrayBuffer) {
-        // Fallback: create a blob URL and play via <audio> element
-        // Less ideal for progressive playback but works as backup
         try {
             const blob = new Blob([arrayBuffer], { type: 'audio/wav' });
             const url = URL.createObjectURL(blob);
             const audio = new Audio();
             audio.src = url;
-            audio.play().catch(e => console.error('Fallback audio play error:', e));
-            audio.onended = () => URL.revokeObjectURL(url);
+            audio.play().then(() => {
+                serverLog('info', `Fallback audio playing: ${arrayBuffer.byteLength} bytes`);
+            }).catch(e => {
+                serverLog('error', `Fallback audio play rejected: ${e.name}: ${e.message}`);
+            });
+            audio.onended = () => {
+                serverLog('info', 'Fallback audio ended');
+                URL.revokeObjectURL(url);
+            };
         } catch (e) {
-            console.error('Fallback playback failed:', e);
+            serverLog('error', `Fallback playback failed: ${e.message}`);
         }
     },
 
@@ -577,12 +598,16 @@ const app = {
             case 'history':
                 this.handleHistory(msg);
                 break;
+            case 'lesson_progress':
+                this.handleLessonProgress(msg);
+                break;
             default:
                 console.log('Unknown message type:', msg.type, msg);
         }
     },
 
     handleStatus(state) {
+        if (this._isReplaying) return;
         switch (state) {
             case 'recording':
                 // New interaction — stop any leftover audio from previous response
@@ -608,7 +633,7 @@ const app = {
     },
 
     handleTranscript(msg) {
-        this.addUserMessage(msg.text);
+        this.addUserMessage(msg.text, msg.language);
     },
 
     handlePartialResponse(msg) {
@@ -647,6 +672,7 @@ const app = {
 
     handleAudioDone() {
         serverLog('info', `Audio done — queue=${this.audioSourceQueue.length}, nextPlayTime=${this.nextPlaybackTime.toFixed(2)}`);
+        this._isReplaying = false;
         // All TTS chunks sent — playback will continue until queued audio finishes
         // Reset nextPlaybackTime for next interaction
         setTimeout(() => {
@@ -673,11 +699,22 @@ const app = {
             this.addSystemMessage('Restored session (' + msg.messages.length + ' messages)');
             for (const entry of msg.messages) {
                 if (entry.role === 'user') {
-                    this.addUserMessage(entry.text);
+                    this.addUserMessage(entry.text, entry.language || null);
                 } else if (entry.role === 'assistant') {
                     this.addAssistantMessage(entry.text);
                 }
             }
+        }
+    },
+
+    handleLessonProgress(msg) {
+        this._lessonInfo = msg;
+        const statusText = this.el['status-text'];
+        if (msg.lessonNumber && msg.totalLessons) {
+            const progress = msg.completedSteps.length > 0
+                ? ` (${msg.completedSteps.length}/${msg.totalSteps} steps)`
+                : '';
+            statusText.textContent = `Lesson ${msg.lessonNumber}/${msg.totalLessons}${progress}`;
         }
     },
 
@@ -706,7 +743,7 @@ const app = {
         }
     },
 
-    addMessage(content, type) {
+    addMessage(content, type, language = null) {
         const container = this.el['messages'];
         const div = document.createElement('div');
         div.className = `message ${type}`;
@@ -715,12 +752,36 @@ const app = {
             const label = document.createElement('div');
             label.className = 'label';
             label.textContent = type === 'user' ? 'You' : 'Bob';
+
+            if (type === 'user' && language) {
+                const langName = this._LANGUAGE_NAMES[language] || language.toUpperCase();
+                const badge = document.createElement('span');
+                badge.className = 'lang-badge';
+                badge.textContent = langName;
+                label.appendChild(badge);
+            }
+
             div.appendChild(label);
         }
 
         const text = document.createElement('div');
+        text.className = 'text-content';
         text.textContent = content;
         div.appendChild(text);
+
+        if (type === 'assistant') {
+            div.dataset.rawText = content;
+            const replayBtn = document.createElement('button');
+            replayBtn.className = 'replay-btn';
+            replayBtn.title = 'Replay audio';
+            replayBtn.setAttribute('aria-label', 'Replay audio');
+            replayBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 8.14v7.72A4.5 4.5 0 0016.5 12zM14 3.23v2.06A6.99 6.99 0 0121 12a6.99 6.99 0 01-7 6.71v2.06A9 9 0 0023 12 9 9 0 0014 3.23z"/></svg>';
+            replayBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.replayTts(div.dataset.rawText);
+            });
+            div.appendChild(replayBtn);
+        }
 
         container.appendChild(div);
 
@@ -731,13 +792,14 @@ const app = {
         return div;
     },
 
-    addUserMessage(text) {
-        this.addMessage(text, 'user');
+    addUserMessage(text, language = null) {
+        this.addMessage(text, 'user', language);
     },
 
     addAssistantMessage(text) {
         const div = this.addMessage(text, 'assistant');
-        return div.querySelector('div:last-child');
+        // addMessage appends label, text div, then replay btn — return the text div
+        return div.querySelector('.text-content');
     },
 
     addSystemMessage(text) {
@@ -746,6 +808,17 @@ const app = {
 
     addErrorMessage(text) {
         this.addMessage(text, 'error');
+    },
+
+    replayTts(text) {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        this.stopPlayback();
+        this._isReplaying = true;
+        this.ws.send(JSON.stringify({
+            type: 'replay_tts',
+            text: text,
+            sessionMode: this.sessionMode,
+        }));
     },
 
     // ---- Settings ----

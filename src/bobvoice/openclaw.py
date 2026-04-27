@@ -355,12 +355,13 @@ class OpenClawClient:
         on_tool_start: Callable[[], Awaitable[None]] | None = None,
         user_id: str = "mike",
         session_mode: str = "chat",
+        lesson_context: str | None = None,
     ) -> str:
         if not self._config.enabled:
             return "I'm not connected to an AI service yet. Please configure the OpenClaw gateway."
 
         try:
-            return await self._dispatch(text, language=language, on_delta=on_delta, on_tool_start=on_tool_start, user_id=user_id, session_mode=session_mode)
+            return await self._dispatch(text, language=language, on_delta=on_delta, on_tool_start=on_tool_start, user_id=user_id, session_mode=session_mode, lesson_context=lesson_context)
         except Exception as exc:
             self._logger.error("OpenClaw gateway error: %s", exc)
             return "Sorry, I couldn't reach the AI service. Please try again."
@@ -374,6 +375,7 @@ class OpenClawClient:
         on_tool_start: Callable[[], Awaitable[None]] | None = None,
         user_id: str = "mike",
         session_mode: str = "chat",
+        lesson_context: str | None = None,
     ) -> str:
         import websockets
 
@@ -400,7 +402,9 @@ class OpenClawClient:
             await self._await_response(websocket, connect_id, timeout)
 
             message = text
-            if session_mode.endswith("_teacher"):
+            if lesson_context:
+                prefix = lesson_context
+            elif session_mode.endswith("_teacher"):
                 prefix = _load_prompt_template(session_mode)
             else:
                 prefix = "[You are a voice assistant. Respond in plain spoken language: no emojis, no markdown formatting, no asterisks, no bullet points. Just natural speech.]"

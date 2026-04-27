@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -13,33 +12,48 @@ import soundfile as sf
 
 logger = logging.getLogger(__name__)
 
-_REF_AUDIO_DEFAULT = (
-    Path.home()
-    / ".openclaw/workspace/projects/bob-cast-skill-setup/tasks/fb7538ce/bob_reference_voice_recovered.wav"
-)
+_VOICES_DIR = Path.home() / ".openclaw" / "bobvoice-voices"
 
+_VOICE_PROFILES: dict[str, dict[str, Any]] = {
+    "en": {
+        "instruct": "male, australian accent, young adult",
+        "ref_text": (
+            "G'day! I'm Bob, your friendly voice assistant. "
+            "I'm here to help you learn and practice all sorts of new things."
+        ),
+        "speed": 1.0,
+    },
+    "fr": {
+        "instruct": "female, young adult",
+        "ref_text": (
+            "Bonjour! Je suis votre professeur de français. "
+            "Je suis ravie de vous aider à apprendre cette belle langue."
+        ),
+        "speed": 1.0,
+    },
+    "pt": {
+        "instruct": "female, portuguese accent, young adult",
+        "ref_text": (
+            "Olá! Eu sou sua professora de português brasileiro. "
+            "É um prazer ajudar você a aprender esta língua maravilhosa."
+        ),
+        "speed": 1.0,
+    },
+}
+
+_DEFAULT_VOICE = "en"
 
 _ABBREVIATIONS = frozenset({"dr", "mr", "mrs", "ms", "prof", "sr", "jr", "st", "vs", "etc", "eg", "ie", "approx"})
 
-_VOICE_INSTRUCT_BOB = "male, australian accent, young adult"
-_VOICE_INSTRUCT: dict[str, str] = {
-    "pt": "female, portuguese accent, young adult",
-    "fr": "female, young adult",
-}
-
 
 def _split_sentences(text: str) -> list[str]:
-    # Normalize whitespace but don't split on bare newlines
     cleaned = " ".join(text.strip().split())
-    # Split after sentence-ending punctuation followed by space,
-    # but not after common abbreviations (Dr. Mr. etc.)
     parts = re.split(r"(?<=[.!?])\s+", cleaned)
     result: list[str] = []
     for part in parts:
         s = part.strip()
         if not s:
             continue
-        # Re-attach fragments that start with lowercase or follow an abbreviation
         if result and (s[0].islower() or _is_abbreviation(result[-1])):
             result[-1] = result[-1] + " " + s
         else:
@@ -82,13 +96,10 @@ def _samples_to_wav(samples: np.ndarray, sample_rate: int) -> bytes:
 
 
 class TTSEngine:
-    def __init__(self, ref_audio_path: str | None = None, num_steps: int = 32) -> None:
-        self._ref_audio_path = ref_audio_path or os.getenv(
-            "BOBVOICE_TTS_REF_AUDIO", str(_REF_AUDIO_DEFAULT)
-        )
+    def __init__(self, num_steps: int = 32) -> None:
         self._num_steps = num_steps
         self._model: Any = None
-        self._voice_prompt: Any = None
+        self._voice_prompts: dict[str, Any] = {}
         self._lock = asyncio.Lock()
 
     def _ensure_model(self) -> None:
@@ -102,36 +113,66 @@ class TTSEngine:
             device_map="cuda:0",
             dtype="float16",
         )
-        if Path(str(self._ref_audio_path)).exists():
-            logger.info("Creating voice clone prompt from %s", self._ref_audio_path)
-            self._voice_prompt = self._model.create_voice_clone_prompt(self._ref_audio_path)
-        else:
-            logger.warning("Reference audio not found: %s — using default voice", self._ref_audio_path)
-        logger.info("OmniVoice ready")
+        logger.info("OmniVoice model loaded")
+
+    def _ensure_ref_audio(self, lang: str) -> Path:
+        """Generate reference audio for a voice if it doesn't already exist."""
+        wav_path = _VOICES_DIR / f"{lang}.wav"
+        if wav_path.exists():
+            return wav_path
+
+        profile = _VOICE_PROFILES[lang]
+        logger.info("Generating reference audio for %s voice: %s", lang, profile["instruct"])
+
+        from omnivoice import OmniVoiceGenerationConfig
+
+        audio_arrays = self._model.generate(
+            text=profile["ref_text"],
+            language=lang,
+            instruct=profile["instruct"],
+            generation_config=OmniVoiceGenerationConfig(num_step=self._num_steps),
+        )
+        audio = audio_arrays[0]
+
+        wav_path.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(str(wav_path), audio, 24000, subtype="PCM_16", format="WAV")
+        duration = len(audio) / 24000
+        logger.info("Saved %s reference audio: %.1fs -> %s", lang, duration, wav_path)
+        return wav_path
 
     def preload(self) -> None:
         self._ensure_model()
+
+        for lang in _VOICE_PROFILES:
+            wav_path = self._ensure_ref_audio(lang)
+            logger.info("Creating voice clone prompt for %s from %s", lang, wav_path)
+            self._voice_prompts[lang] = self._model.create_voice_clone_prompt(str(wav_path))
+
+        logger.info("All voices ready: %s", list(self._voice_prompts.keys()))
 
     def generate(self, text: str, language: str) -> tuple[np.ndarray, int]:
         """Generate speech for full text. OmniVoice handles internal chunking."""
         from omnivoice import OmniVoiceGenerationConfig
 
         self._ensure_model()
+
         cleaned = " ".join(text.strip().split())
-        if language in ("en", ""):
-            voice_prompt = self._voice_prompt
-            instruct = None
-            speed = 1.2
-        else:
-            voice_prompt = None
-            instruct = _VOICE_INSTRUCT.get(language, _VOICE_INSTRUCT_BOB)
-            speed = 1.0
+
+        voice_lang = language if language in self._voice_prompts else _DEFAULT_VOICE
+        voice_prompt = self._voice_prompts.get(voice_lang)
+        profile = _VOICE_PROFILES.get(voice_lang, _VOICE_PROFILES[_DEFAULT_VOICE])
+
         audio_arrays = self._model.generate(
             text=cleaned,
             language=language,
             voice_clone_prompt=voice_prompt,
-            instruct=instruct,
-            speed=speed,
+            speed=profile["speed"],
             generation_config=OmniVoiceGenerationConfig(num_step=self._num_steps),
         )
-        return audio_arrays[0], 24000
+        audio = audio_arrays[0]
+
+        if audio.size == 0:
+            logger.warning("OmniVoice returned empty audio for %r (lang=%s), substituting silence", text[:40], language)
+            audio = np.zeros(int(24000 * 0.3), dtype=np.float32)
+
+        return audio, 24000

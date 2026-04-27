@@ -79,6 +79,7 @@ class TestTTSEngine:
         with patch("bobvoice.tts.TTSEngine._ensure_model"):
             engine = TTSEngine()
             engine._model = MagicMock()
+            engine._voice_prompts = {"en": MagicMock(), "fr": MagicMock(), "pt": MagicMock()}
             engine._model.generate.return_value = [audio]
             result_audio, sr = engine.generate("Hello world.", "en")
         assert sr == 24000
