@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cadillac Winery Map — July 2026</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; }
+  .header { background: linear-gradient(135deg, #722F37, #4a1c24); padding: 20px 30px; text-align: center; }
+  .header h1 { font-size: 1.6em; margin-bottom: 5px; }
+  .header p { opacity: 0.8; font-size: 0.95em; }
+  #map { width: 100%; height: 65vh; min-height: 500px; }
+  .legend { background: rgba(26,26,46,0.95); padding: 15px 20px; display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; align-items: center; border-top: 2px solid #722F37; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.85em; white-space: nowrap; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 6px rgba(0,0,0,0.4); }
+  .house-dot { width: 18px; height: 18px; background: #fff !important; border-radius: 50%; border: 3px solid #722F37; }
+  .footer { text-align: center; padding: 10px; font-size: 0.75em; opacity: 0.5; }
+  .popup-title { font-weight: 700; font-size: 1.05em; margin-bottom: 4px; }
+  .popup-desc { font-size: 0.88em; line-height: 1.4; margin-bottom: 4px; }
+  .popup-addr { font-size: 0.78em; opacity: 0.7; font-style: italic; }
+  .popup-dist { font-size: 0.8em; color: #722F37; font-weight: 600; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🍷 Cadillac Winery Map</h1>
+  <p>Top 5 family-friendly wineries near your house — July 2026</p>
+</div>
+
+<div id="map"></div>
+
+<div class="legend" id="legend"></div>
+
+<div class="footer">Map data © OpenStreetMap | Built for Cleaver Family Trip</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const house = { lat: 44.62, lon: -0.32 };
+
+const wineries = [
+  {
+    name: "Château Coutet",
+    lat: 44.6036, lon: -0.3208,
+    addr: "Rue de Coutet, 33340 Barsac",
+    desc: "<b>1er Grand Cru Classé (1855)</b><br>Barsac sweet wines • Pond & garden with ducks<br>Jelly-tasting workshop for kids",
+    color: "#E74C3C",
+    dist: "12 km • 15 min drive"
+  },
+  {
+    name: "Château Guiraud",
+    lat: 44.5917, lon: -0.3464,
+    addr: "Route de Bordeaux, 33210 Sauternes",
+    desc: "<b>1er Grand Cru Classé — Organic</b><br>Sauternes sweet wines • 128ha parkland<br>Vineyard walking trails, bees & birds",
+    color: "#27AE60",
+    dist: "18 km • 20 min drive"
+  },
+  {
+    name: "Château de la Rivière",
+    lat: 44.8917, lon: -0.2667,
+    addr: "rue Goffre, 33126 La Rivière (Fronsac)",
+    desc: "<b>16th Century Fortress</b><br>Fronsac red wines • Flashlight cave tours!<br>Huge courtyard for kids to run",
+    color: "#8E44AD",
+    dist: "35 km • 35 min drive"
+  },
+  {
+    name: "Château La Fleur Cardinale",
+    lat: 44.8939, lon: -0.1453,
+    addr: "Route de Libourne, 33330 Saint-Émilion",
+    desc: "<b>Interactive Kid Experience</b><br>St-Emilion Grand Cru reds<br>Vineyard games for ages 3–12",
+    color: "#F39C12",
+    dist: "35 km • 35 min drive"
+  },
+  {
+    name: "Maison des Vins de Cadillac",
+    lat: 44.6178, lon: -0.3186,
+    addr: "D10 Route de Langon, 33410 Cadillac-sur-Garonne",
+    desc: "<b>Cadillac AOC Tasting Room</b><br>All local producers under one roof<br><b>Walking distance from your house!</b>",
+    color: "#3498DB",
+    dist: "In town 🚶"
+  }
+];
+
+// Init map
+const map = L.map('map').setView([44.72, -0.28], 10);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  maxZoom: 19
+}).addTo(map);
+
+// House marker
+L.circleMarker([house.lat, house.lon], {
+  radius: 10, fillColor: '#fff', color: '#722F37', weight: 3, fillOpacity: 1
+}).bindPopup('<div class="popup-title">🏠 Your House (Cadillac)</div><div class="popup-desc">Base for the trip — 7–15 July 2026</div>').addTo(map);
+
+// Winery markers
+wineries.forEach(w => {
+  L.circleMarker([w.lat, w.lon], {
+    radius: 9, fillColor: w.color, color: '#fff', weight: 2, fillOpacity: 0.95
+  }).bindPopup(
+    `<div class="popup-title" style="color:${w.color}">${w.name}</div>` +
+    `<div class="popup-desc">${w.desc}</div>` +
+    `<div class="popup-addr">📍 ${w.addr}</div>` +
+    `<div class="popup-dist">${w.dist}</div>`
+  ).addTo(map);
+});
+
+// Legend
+const legendEl = document.getElementById('legend');
+const houseItem = document.createElement('div');
+houseItem.className = 'legend-item';
+houseItem.innerHTML = '<div class="house-dot"></div> 🏠 Your House';
+legendEl.appendChild(houseItem);
+
+wineries.forEach(w => {
+  const item = document.createElement('div');
+  item.className = 'legend-item';
+  item.innerHTML = `<div class="dot" style="background:${w.color}"></div> ${w.name}`;
+  legendEl.appendChild(item);
+});
+</script>
+</body>
+</html>
