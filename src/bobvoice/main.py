@@ -15,15 +15,20 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 from .openclaw import OpenClawClient, OpenClawConfig
+from .session_store import SessionStore
 from .stt import STTEngine
 from .tts import TTSEngine, samples_to_wav
 from .ws_protocol import (
     AudioDoneMessage,
     CancelMessage,
+    ClearHistoryMessage,
     ErrorMessage,
+    HistoryEntry,
+    HistoryMessage,
     LatencyMessage,
     PartialResponseMessage,
     ResponseTextMessage,
+    SessionHistoryMessage,
     SetLanguageMessage,
     StartRecordingMessage,
     StatusMessage,
@@ -38,6 +43,7 @@ app = FastAPI(title="Bob Voice")
 
 stt_engine = STTEngine()
 tts_engine = TTSEngine()
+session_store = SessionStore()
 
 _logger = logging.getLogger("bobvoice.main")
 openclaw_config = OpenClawConfig.from_env()
@@ -54,10 +60,20 @@ def _preload_models() -> None:
     _logger.info("Preloading models...")
     stt_engine.preload()
     tts_engine.preload()
+    session_store.delete_old_sessions(max_age_days=30)
     _logger.info("All models loaded")
 
 
+@app.on_event("shutdown")
+def _cleanup() -> None:
+    session_store.close()
+
+
 _StatusState = Literal["recording", "transcribing", "thinking", "speaking", "idle"]
+
+
+def _session_key(user_id: str, session_mode: str) -> str:
+    return f"bobvoice:{session_mode}:{user_id}"
 
 
 async def _send_status(websocket: WebSocket, state: _StatusState) -> None:
@@ -203,6 +219,11 @@ async def _process_audio(
         ResponseTextMessage(text=response).model_dump_json()
     )
 
+    # Persist the exchange to session store
+    key = _session_key(user_id, session_mode)
+    session_store.add_message(key, "user", text)
+    session_store.add_message(key, "assistant", response)
+
     e2e_ms = int((time.monotonic() - t0) * 1000)
 
     await websocket.send_text(AudioDoneMessage().model_dump_json())
@@ -269,6 +290,19 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
                     case SetLanguageMessage() as m:
                         language = m.language
+
+                    case SessionHistoryMessage() as m:
+                        key = _session_key(m.userId, m.sessionMode)
+                        messages = session_store.get_messages(key)
+                        await websocket.send_text(
+                            HistoryMessage(
+                                messages=[HistoryEntry(role=e["role"], text=e["text"]) for e in messages]
+                            ).model_dump_json()
+                        )
+
+                    case ClearHistoryMessage() as m:
+                        key = _session_key(m.userId, m.sessionMode)
+                        session_store.delete_session(key)
 
             elif "bytes" in msg:
                 audio_chunks.append(msg["bytes"])

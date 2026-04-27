@@ -29,13 +29,27 @@ class SetLanguageMessage(BaseModel):
     language: str
 
 
-ClientMessage = StartRecordingMessage | StopRecordingMessage | CancelMessage | SetLanguageMessage
+class SessionHistoryMessage(BaseModel):
+    type: Literal["session_history"]
+    userId: str
+    sessionMode: Literal["chat", "portuguese_teacher", "french_teacher"] = "chat"
+
+
+class ClearHistoryMessage(BaseModel):
+    type: Literal["clear_history"]
+    userId: str
+    sessionMode: Literal["chat", "portuguese_teacher", "french_teacher"] = "chat"
+
+
+ClientMessage = StartRecordingMessage | StopRecordingMessage | CancelMessage | SetLanguageMessage | SessionHistoryMessage | ClearHistoryMessage
 
 _MESSAGE_MAP: dict[str, type[ClientMessage]] = {
     "start_recording": StartRecordingMessage,
     "stop_recording": StopRecordingMessage,
     "cancel": CancelMessage,
     "set_language": SetLanguageMessage,
+    "session_history": SessionHistoryMessage,
+    "clear_history": ClearHistoryMessage,
 }
 
 
@@ -92,3 +106,13 @@ class AudioDoneMessage(BaseModel):
 class ErrorMessage(BaseModel):
     type: Literal["error"] = "error"
     message: str
+
+
+class HistoryEntry(BaseModel):
+    role: str
+    text: str
+
+
+class HistoryMessage(BaseModel):
+    type: Literal["history"] = "history"
+    messages: list[HistoryEntry]

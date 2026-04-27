@@ -130,6 +130,12 @@ const app = {
                 this.ensureAudioContext();
                 this.addSystemMessage('Connected — ' + (this._MODE_LABELS[this.sessionMode] || 'Bob Voice'));
                 this.requestMic();
+                // Request session history from server
+                this.ws.send(JSON.stringify({
+                    type: 'session_history',
+                    userId: this.userId,
+                    sessionMode: this.sessionMode,
+                }));
                 serverLog('info', `WebSocket connected, mode=${this.sessionMode}, lang=${this.language}, AudioContext state=${this.audioContext?.state}, sampleRate=${this.audioContext?.sampleRate}`);
             };
 
@@ -195,7 +201,7 @@ const app = {
                 if (!this.isConnected && this.serverUrl) {
                     this.el['server-url'].value = this.serverUrl;
                     this.el['user-id'].value = this.userId;
-                    this.connect();
+                    this.connect(this.sessionMode);
                 }
             }, 3000);
         }
@@ -568,6 +574,9 @@ const app = {
             case 'error':
                 this.handleError(msg);
                 break;
+            case 'history':
+                this.handleHistory(msg);
+                break;
             default:
                 console.log('Unknown message type:', msg.type, msg);
         }
@@ -653,6 +662,34 @@ const app = {
             this.isProcessing = false;
             this.updateStatus('idle', 'Ready');
             this.el['ptt-btn'].disabled = false;
+        }
+    },
+
+    handleHistory(msg) {
+        const container = this.el['messages'];
+        container.innerHTML = '';
+
+        if (msg.messages && msg.messages.length > 0) {
+            this.addSystemMessage('Restored session (' + msg.messages.length + ' messages)');
+            for (const entry of msg.messages) {
+                if (entry.role === 'user') {
+                    this.addUserMessage(entry.text);
+                } else if (entry.role === 'assistant') {
+                    this.addAssistantMessage(entry.text);
+                }
+            }
+        }
+    },
+
+    clearHistory() {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({
+                type: 'clear_history',
+                userId: this.userId,
+                sessionMode: this.sessionMode,
+            }));
+            this.el['messages'].innerHTML = '';
+            this.addSystemMessage('History cleared');
         }
     },
 
